@@ -1,0 +1,19 @@
+{
+  "name": "@alfred/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview"
+  },
+  "dependencies": {
+    "@alfred/core": "file:../../packages/core",
+    "@alfred/providers": "file:../../packages/providers",
+    "@alfred/tools": "file:../../packages/tools",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
+}

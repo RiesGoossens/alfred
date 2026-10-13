@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node", "electron-vite/node"],
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/providers" },
+    { "path": "../../packages/tools" }
+  ],
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

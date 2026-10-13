@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./apps/desktop" },
+    { "path": "./packages/core" },
+    { "path": "./packages/providers" },
+    { "path": "./packages/tools" },
+    { "path": "./packages/voice" }
+  ]
+}

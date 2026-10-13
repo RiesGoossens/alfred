@@ -1,0 +1,28 @@
+node_modules/
+dist/
+out/
+**/out/
+coverage/
+.electron-vite/
+*.tsbuildinfo
+*.d.ts.map
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Local runtime state
+data/*
+!data/.gitkeep
+apps/desktop/data/
+logs/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
