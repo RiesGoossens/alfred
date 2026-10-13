@@ -21,6 +21,25 @@ export interface ToolExecutionContext {
   readonly signal?: AbortSignal
 }
 
+export interface ConfirmationRequest {
+  readonly id: string
+  readonly toolId: string
+  readonly toolName: string
+  readonly action: string
+  readonly target?: string
+  readonly explanation: string
+  readonly arguments: unknown
+  readonly createdAt: number
+}
+
+export type ConfirmationDecision = 'approved' | 'denied' | 'expired' | 'cancelled'
+
+/** A main-process owned boundary. Renderers never receive direct tool access. */
+export interface ConfirmationProvider {
+  isAvailable(): boolean
+  request(request: ConfirmationRequest, signal?: AbortSignal): Promise<ConfirmationDecision>
+}
+
 export interface ToolDefinition {
   readonly id: string
   readonly displayName: string
@@ -28,6 +47,9 @@ export interface ToolDefinition {
   readonly inputSchema: ZodTypeAny
   readonly risk: ToolRisk
   readonly enabled: boolean
+  readonly confirmation?: (
+    input: unknown
+  ) => Omit<ConfirmationRequest, 'id' | 'toolId' | 'toolName' | 'arguments' | 'createdAt'>
   readonly execute: (input: unknown, context: ToolExecutionContext) => Promise<unknown>
 }
 
@@ -63,9 +85,15 @@ export class ToolRegistry {
 }
 
 export class ExecutionPolicy {
-  allows(tool: ToolDefinition, origin: ToolExecutionContext['origin']): boolean {
+  allows(
+    tool: ToolDefinition,
+    origin: ToolExecutionContext['origin'],
+    confirmationAvailable = false
+  ): boolean {
     void origin
-    return tool.enabled && tool.risk === 'safe'
+    return (
+      tool.enabled && (tool.risk === 'safe' || (tool.risk === 'confirm' && confirmationAvailable))
+    )
   }
 }
 
@@ -74,12 +102,17 @@ export class CentralToolExecutor implements ToolExecutor {
     private readonly registry: ToolRegistry,
     private readonly policy: ExecutionPolicy = new ExecutionPolicy(),
     private readonly logger: Logger = getLogger('tools'),
-    private readonly timeoutMs = 5000
+    private readonly timeoutMs = 5000,
+    private readonly confirmationProvider?: ConfirmationProvider
   ) {}
 
   getExecutableToolDescriptions(): readonly LlmToolDefinition[] {
     return this.registry.describe(
-      this.registry.listEnabled().filter((tool) => this.policy.allows(tool, 'llm'))
+      this.registry
+        .listEnabled()
+        .filter((tool) =>
+          this.policy.allows(tool, 'llm', this.confirmationProvider?.isAvailable() === true)
+        )
     )
   }
 
@@ -90,7 +123,7 @@ export class CentralToolExecutor implements ToolExecutor {
       return this.failure(request, 'unknown_tool', 'That tool is not registered.', startedAt)
     if (!tool.enabled)
       return this.failure(request, 'disabled_tool', 'That tool is not enabled.', startedAt)
-    if (!this.policy.allows(tool, request.origin))
+    if (tool.risk === 'restricted')
       return this.failure(
         request,
         'permission_denied',
@@ -113,6 +146,64 @@ export class CentralToolExecutor implements ToolExecutor {
         'The tool arguments were invalid.',
         startedAt
       )
+
+    if (tool.risk === 'confirm') {
+      if (this.confirmationProvider?.isAvailable() !== true)
+        return this.failure(
+          request,
+          'confirmation_unavailable',
+          'Confirmation is unavailable, so this action was not performed.',
+          startedAt
+        )
+      const confirmation = tool.confirmation?.(parsed.data) ?? {
+        action: tool.displayName,
+        explanation: tool.description
+      }
+      const confirmationRequest: ConfirmationRequest = {
+        id: crypto.randomUUID(),
+        toolId: tool.id,
+        toolName: tool.displayName,
+        arguments: parsed.data,
+        createdAt: Date.now(),
+        ...confirmation
+      }
+      this.logger.info(
+        { requestId: confirmationRequest.id, toolId: tool.id },
+        'Confirmation requested'
+      )
+      const decision = await this.confirmationProvider.request(confirmationRequest, request.signal)
+      this.logger.info(
+        {
+          requestId: confirmationRequest.id,
+          toolId: tool.id,
+          decision,
+          durationMs: Date.now() - startedAt
+        },
+        'Confirmation resolved'
+      )
+      if (decision !== 'approved')
+        return this.failure(
+          request,
+          decision === 'expired'
+            ? 'confirmation_expired'
+            : decision === 'cancelled'
+              ? 'cancelled'
+              : 'confirmation_denied',
+          decision === 'expired'
+            ? 'The approval request expired, so this action was not performed.'
+            : decision === 'cancelled'
+              ? 'The approval request was cancelled, so this action was not performed.'
+              : 'The user declined this action, so it was not performed.',
+          startedAt
+        )
+      if (isSignalAborted(request.signal) || !this.policy.allows(tool, request.origin, true))
+        return this.failure(
+          request,
+          'cancelled',
+          'Tool execution was cancelled before approval completed.',
+          startedAt
+        )
+    }
 
     const controller = new AbortController()
     const onAbort = () => controller.abort()
@@ -267,9 +358,10 @@ export const getSystemInfoTool: ToolDefinition = {
   async execute(_input, context) {
     if (context.signal?.aborted) throw new Error('cancelled')
     const cpu = cpus()[0]
+    const rawVersion = release()
     return {
-      operatingSystem: type(),
-      operatingSystemVersion: release(),
+      operatingSystem: identifyOperatingSystem(type(), rawVersion),
+      operatingSystemVersion: rawVersion,
       architecture: process.arch,
       cpuModel: cpu?.model ?? 'Unavailable',
       logicalCpuCount: cpus().length,
@@ -324,6 +416,17 @@ export const openApplicationTool: ToolDefinition = {
     .strict(),
   risk: 'confirm',
   enabled: true,
+  confirmation(input) {
+    const { applicationId } = z
+      .object({ applicationId: z.enum(['notepad', 'calculator', 'file_explorer']) })
+      .parse(input)
+    const application = supportedApplications.find((candidate) => candidate.id === applicationId)
+    return {
+      action: `Open ${application?.name ?? 'application'}`,
+      explanation: 'ALFRED will ask Windows to launch this supported application.',
+      ...(application === undefined ? {} : { target: application.name })
+    }
+  },
   async execute(input, context) {
     if (context.signal?.aborted) throw new Error('cancelled')
     const { applicationId } = z
@@ -348,7 +451,10 @@ export const openApplicationTool: ToolDefinition = {
   }
 }
 
-export function createDemonstrationToolExecutor(logger?: Logger): CentralToolExecutor {
+export function createDemonstrationToolExecutor(
+  logger?: Logger,
+  confirmationProvider?: ConfirmationProvider
+): CentralToolExecutor {
   const registry = new ToolRegistry()
   registry.register(getCurrentTimeTool)
   registry.register(calculateTool)
@@ -356,7 +462,25 @@ export function createDemonstrationToolExecutor(logger?: Logger): CentralToolExe
   registry.register(getSystemUsageTool)
   registry.register(listSupportedApplicationsTool)
   registry.register(openApplicationTool)
-  return new CentralToolExecutor(registry, new ExecutionPolicy(), logger)
+  return new CentralToolExecutor(
+    registry,
+    new ExecutionPolicy(),
+    logger,
+    5000,
+    confirmationProvider
+  )
+}
+
+/** Windows NT reports 10.0 for both Windows 10 and 11; product build separates them. */
+export function identifyOperatingSystem(platform: string, rawVersion: string): string {
+  if (platform !== 'Windows_NT') return platform
+  const build = /\d+\.\d+\.(\d+)/.exec(rawVersion)?.[1]
+  if (build === undefined) return 'Windows'
+  return Number(build) >= 22000 ? 'Windows 11' : 'Windows 10'
+}
+
+function isSignalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted ?? false
 }
 
 function toModelJsonSchema(schema: ZodTypeAny, name: string): Record<string, unknown> {

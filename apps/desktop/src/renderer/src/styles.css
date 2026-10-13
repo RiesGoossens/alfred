@@ -39,3 +39,55 @@ p {
   color: #ffd2d2;
   padding: 12px;
 }
+
+.confirmation {
+  border: 1px solid #77c7ff;
+  border-radius: 10px;
+  background: #172334;
+  margin: 24px 0;
+  padding: 20px;
+}
+
+.confirmation h2 {
+  font-size: 1.4rem;
+}
+.actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+button {
+  border: 1px solid #7191ad;
+  border-radius: 6px;
+  background: #202d3c;
+  color: #e7edf7;
+  cursor: pointer;
+  font: inherit;
+  padding: 10px 14px;
+}
+button:focus-visible {
+  outline: 3px solid #77c7ff;
+  outline-offset: 2px;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+button.approve {
+  background: #19724f;
+  border-color: #5ad39c;
+}
+.markdown p {
+  margin: 0.4rem 0;
+}
+.markdown li {
+  color: #b6c2d2;
+  font-size: 1.1rem;
+  line-height: 1.6;
+  margin-left: 1.2rem;
+}
+code {
+  background: #0b1119;
+  border-radius: 3px;
+  padding: 0.1rem 0.25rem;
+}

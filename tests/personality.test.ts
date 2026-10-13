@@ -30,7 +30,7 @@ describe('ALFRED personality system', () => {
       "Respond in the user's language unless they request a different language."
     )
     expect(prompt).toContain('Do not claim to have tools')
-    expect(prompt).toContain('Computer control')
+    expect(prompt).toContain('computer control')
     expect(prompt).toContain('You can have a local, session-only text conversation')
     expect(prompt).not.toContain('C:\\')
     expect(prompt).not.toContain('Conversation history')

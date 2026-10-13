@@ -8,10 +8,12 @@ import {
   getSystemInfoTool,
   getSystemUsageTool,
   getCurrentTimeTool,
+  identifyOperatingSystem,
   listSupportedApplicationsTool,
   openApplicationTool,
   ToolRegistry
 } from '@alfred/tools'
+import type { ConfirmationDecision, ConfirmationProvider, ConfirmationRequest } from '@alfred/tools'
 import { z } from 'zod'
 
 function request(name: string, argumentsValue: unknown) {
@@ -76,7 +78,7 @@ describe('tool registry and executor', () => {
       category: 'disabled_tool'
     })
     await expect(executor.execute(request('confirm_tool', {}))).resolves.toMatchObject({
-      category: 'permission_denied'
+      category: 'confirmation_unavailable'
     })
     await expect(executor.execute(request('restricted_tool', {}))).resolves.toMatchObject({
       category: 'permission_denied'
@@ -123,6 +125,119 @@ describe('tool registry and executor', () => {
     })
     await expect(
       executor.execute(request('open_application', { applicationId: 'notepad' }))
-    ).resolves.toMatchObject({ ok: false, category: 'permission_denied' })
+    ).resolves.toMatchObject({ ok: false, category: 'confirmation_unavailable' })
+  })
+
+  it('requires a matching one-time approval before executing confirm tools', async () => {
+    const registry = new ToolRegistry()
+    let executions = 0
+    registry.register({
+      id: 'confirm_action',
+      displayName: 'Confirm action',
+      description: 'test',
+      inputSchema: z.object({ target: z.string() }).strict(),
+      risk: 'confirm',
+      enabled: true,
+      confirmation: (input) => ({
+        action: 'Open test target',
+        explanation: 'A test action will run.',
+        target: (input as { target: string }).target
+      }),
+      async execute() {
+        executions += 1
+        return { completed: true }
+      }
+    })
+    const confirmations = new TestConfirmationProvider()
+    const executor = new CentralToolExecutor(
+      registry,
+      new ExecutionPolicy(),
+      undefined,
+      5000,
+      confirmations
+    )
+    const result = executor.execute(request('confirm_action', { target: 'Notepad' }))
+    await Promise.resolve()
+    expect(confirmations.requests).toHaveLength(1)
+    expect(executor.getExecutableToolDescriptions().map((tool) => tool.name)).toContain(
+      'confirm_action'
+    )
+    expect(executions).toBe(0)
+    expect(confirmations.resolve(confirmations.requests[0]!.id, 'approved')).toBe(true)
+    await expect(result).resolves.toMatchObject({ ok: true, output: { completed: true } })
+    expect(executions).toBe(1)
+    expect(confirmations.resolve(confirmations.requests[0]!.id, 'approved')).toBe(false)
+    expect(executions).toBe(1)
+  })
+
+  it('fails closed for rejection, cancellation, unavailable providers, and isolated pending requests', async () => {
+    const registry = new ToolRegistry()
+    let executions = 0
+    const confirmTool: ToolDefinition = {
+      id: 'confirmed',
+      displayName: 'Confirmed',
+      description: 'test',
+      inputSchema: z.object({ value: z.string() }).strict(),
+      risk: 'confirm',
+      enabled: true,
+      async execute() {
+        executions += 1
+        return {}
+      }
+    }
+    registry.register(confirmTool)
+    const unavailable = new CentralToolExecutor(registry)
+    await expect(unavailable.execute(request('confirmed', { value: 'a' }))).resolves.toMatchObject({
+      category: 'confirmation_unavailable'
+    })
+    const confirmations = new TestConfirmationProvider()
+    const executor = new CentralToolExecutor(
+      registry,
+      new ExecutionPolicy(),
+      undefined,
+      5000,
+      confirmations
+    )
+    const first = executor.execute({
+      ...request('confirmed', { value: 'a' }),
+      call: { id: 'a', name: 'confirmed', arguments: { value: 'a' } }
+    })
+    const second = executor.execute({
+      ...request('confirmed', { value: 'b' }),
+      call: { id: 'b', name: 'confirmed', arguments: { value: 'b' } }
+    })
+    await Promise.resolve()
+    expect(confirmations.requests).toHaveLength(2)
+    expect(confirmations.resolve(confirmations.requests[1]!.id, 'denied')).toBe(true)
+    expect(confirmations.resolve('unknown', 'approved')).toBe(false)
+    expect(confirmations.resolve(confirmations.requests[0]!.id, 'cancelled')).toBe(true)
+    await expect(first).resolves.toMatchObject({ category: 'cancelled' })
+    await expect(second).resolves.toMatchObject({ category: 'confirmation_denied' })
+    expect(executions).toBe(0)
+  })
+
+  it('identifies Windows 10 and Windows 11 without inventing a feature update', () => {
+    expect(identifyOperatingSystem('Windows_NT', '10.0.19045')).toBe('Windows 10')
+    expect(identifyOperatingSystem('Windows_NT', '10.0.26200')).toBe('Windows 11')
+    expect(identifyOperatingSystem('Linux', '6.8.0')).toBe('Linux')
   })
 })
+
+class TestConfirmationProvider implements ConfirmationProvider {
+  readonly requests: ConfirmationRequest[] = []
+  private readonly pending = new Map<string, (decision: ConfirmationDecision) => void>()
+  isAvailable(): boolean {
+    return true
+  }
+  request(request: ConfirmationRequest): Promise<ConfirmationDecision> {
+    this.requests.push(request)
+    return new Promise((resolve) => this.pending.set(request.id, resolve))
+  }
+  resolve(id: string, decision: ConfirmationDecision): boolean {
+    const resolve = this.pending.get(id)
+    if (resolve === undefined) return false
+    this.pending.delete(id)
+    resolve(decision)
+    return true
+  }
+}

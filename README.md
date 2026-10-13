@@ -8,19 +8,20 @@ architecture over unrestricted computer control.
 
 ## Current status
 
-**Milestone 5.1 — personality-system refinements are implemented.** This repository
+**Milestone 8 — permissions and per-action confirmations are implemented.** This repository
 provides a strict TypeScript workspace, validated local configuration, shared logging, Ollama
 status/model discovery, streamed text conversations, and a minimal Electron + React desktop shell.
 
 ALFRED can now hold a **local, session-only text conversation** through Ollama. Responses stream
-into the development window as the model generates them. It cannot execute tools, store persistent
-memory, use voice, or control the computer.
+into the development window as the model generates them. It has no persistent memory, voice, web
+access, file access, or unrestricted computer control.
 
 ## Tool architecture
 
 ALFRED uses an explicit registry, policy, and centralized executor for structured LLM tool calls.
-Only registered, enabled, safe-classified tools are advertised to Ollama and may run. Confirm and
-restricted tools are denied until a future approval system exists. Inputs are Zod-validated before
+Safe tools run only through the centralized executor. Confirm-classified tools are advertised only
+while the focused desktop confirmation interface is operational; every invocation needs its own
+one-time approval. Restricted tools are never advertised or run. Inputs are Zod-validated before
 handlers receive them; cancellation and a bounded timeout are applied cooperatively.
 
 The current demonstration tools are `get_current_time` and `calculate` (add, subtract, multiply,
@@ -37,10 +38,14 @@ logical CPU count, memory bytes, and uptime. `get_system_usage` reports memory b
 ALFRED-process RSS bytes. `list_supported_applications` lists available Notepad, Calculator, and
 File Explorer entries without scanning the registry or filesystem broadly.
 
-`open_application` is registered only as a confirmation-required tool. It is not executable or
-advertised until Step 8 provides a confirmation workflow; ALFRED therefore cannot currently launch
-an application. Its handler accepts only stable allowlisted identifiers and never model-provided
-paths or shell commands.
+`open_application` can launch an available allowlisted application only after the user approves its
+dedicated in-app confirmation card. Each request has a unique in-memory ID and is invalidated on
+rejection, timeout, cancellation, window closure, or restart. The handler accepts only stable
+allowlisted identifiers and never model-provided paths, scripts, or shell commands. A successful
+result means Windows accepted the launch request; it does not claim the application window is visible.
+
+The confirmation flow currently supports one desktop window and a 30-second approval lifetime.
+Approvals are intentionally not persisted or shared with later requests.
 
 ## Personality
 
@@ -129,9 +134,10 @@ npm run test:ollama
 npm run dev
 ```
 
-`npm run dev` starts the minimal desktop foundation window. It is not an assistant yet.
-Enter a message and press Enter or **Send** to test the local conversation pipeline. **Stop** cancels
-the current generation. The configured model is selected with `ALFRED_OLLAMA_MODEL` in `.env.local`;
+`npm run dev` starts the local desktop assistant. Enter a message and press Enter or **Send** to test
+the local conversation pipeline. A supported application launch must be approved in the visible,
+focused confirmation card; **Stop** cancels the current generation and any pending approval. The
+configured model is selected with `ALFRED_OLLAMA_MODEL` in `.env.local`;
 ALFRED does not select or download a fallback model automatically.
 `npm run test:ollama` is an optional real-runtime integration test and requires Ollama to be
 running; the normal test suite never requires a local model runtime.
